@@ -21,40 +21,52 @@ jobs:
             runner: ubuntu-22.04        # older image => lower glibc floor for the .so
             lib: gametank_libretro.so
             make: make
+            shell: bash
             harness: true
           - platform: linux-aarch64
             runner: ubuntu-22.04-arm
             lib: gametank_libretro.so
             make: make
+            shell: bash
             harness: true
           - platform: macos-aarch64
             runner: macos-14
             lib: gametank_libretro.dylib
             make: make
+            shell: bash
             harness: true
           - platform: macos-x86_64
             runner: macos-14             # cross-compile x86_64 on the arm64 runner
             lib: gametank_libretro.dylib
             make: make CXXFLAGS_EXTRA=-arch\ x86_64 LDFLAGS_EXTRA=-arch\ x86_64
+            shell: bash
             harness: false               # can't run an x86_64 dylib on the arm64 host
           - platform: windows-x86_64
             runner: windows-2022
             lib: gametank_libretro.dll
             make: make
+            shell: 'msys2 {0}'
             harness: false
           - platform: android-arm64
             runner: ubuntu-22.04
             lib: gametank_libretro.so
             make: make platform=android
+            shell: bash
             harness: false               # NDK cross-build, no on-host run
     runs-on: ${{ matrix.runner }}
+    # Run every step in bash. On Windows, the msys2 step below puts an msys2 bash
+    # + clang + make + zip on PATH; GitHub's `shell: bash` then uses it. This
+    # avoids a dynamic shell expression (the {0} template inside a ${{ }} ternary
+    # is what GitHub's workflow parser rejected).
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
 
       # Linux/macOS: clang++ (the Makefile default) is already present.
-      # Windows: use the LLVM/clang++ that the runner ships (MSYS not needed —
-      # our core links only the C/C++ runtimes, no platform libs).
-      - name: Set up clang (Windows)
+      # Windows: install the LLVM/clang++ toolchain + make + zip via msys2.
+      - name: Set up clang toolchain (Windows)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
@@ -63,37 +75,27 @@ jobs:
 
       - name: Build
         if: matrix.platform != 'android-arm64'
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
         run: ${{ matrix.make }}
 
       - name: Build (Android NDK cross)
         if: matrix.platform == 'android-arm64'
-        shell: bash
-        run: |
-          # $ANDROID_NDK_LATEST_HOME is preinstalled on ubuntu runners.
-          make platform=android NDK="$ANDROID_NDK_LATEST_HOME" API=24
+        run: make platform=android NDK="$ANDROID_NDK_LATEST_HOME" API=24
 
-      - name: Harness (render a real .gtr, assert non-blank)
+      - name: Harness (render a real .gtr)
         if: matrix.harness
-        shell: bash
         run: |
           make test
           # tutorial/colortest ROMs are not in this repo; fetch a known .gtr from
           # the upstream emulator repo for a deterministic smoke test.
-          curl -sL -o /tmp/hello.gtr \
+          curl -sL -o hello.gtr \
             https://raw.githubusercontent.com/clydeshaffer/GameTankEmulator/master/roms/hello.gtr
-          ./test/harness /tmp/hello.gtr 30
+          ./test/harness hello.gtr 30
 
       - name: Package
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
         run: |
           mkdir -p dist
           strip "${{ matrix.lib }}" 2>/dev/null || true
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            zip -j "dist/gametank_libretro-${{ matrix.platform }}.zip" "${{ matrix.lib }}" gametank_libretro.info
-          else
-            zip -j "dist/gametank_libretro-${{ matrix.platform }}.zip" "${{ matrix.lib }}" gametank_libretro.info
-          fi
+          zip -j "dist/gametank_libretro-${{ matrix.platform }}.zip" "${{ matrix.lib }}" gametank_libretro.info
 
       - uses: actions/upload-artifact@v4
         with:
