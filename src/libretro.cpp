@@ -131,6 +131,8 @@ static retro_input_state_t       input_state_cb;
 static retro_log_printf_t        log_cb;
 
 static bool force_ram32k = false;  // core option override (FLASH2M -> FLASH2M_RAM32K)
+static bool flash_dirty  = false;  // a FLASH2M cart self-modified its 2 MB image
+                                   // -> include the flash in the save state
 
 // ===========================================================================
 // Bus functions (ported from gte.cpp, devtools stripped)
@@ -282,12 +284,14 @@ void MemoryWrite(uint16_t address, uint8_t value) {
                 }
                 *location &= value;
                 cartridge_state.write_mode = false;
+                flash_dirty = true;   // self-modified -> serialize the flash image
             } else {
                 if (value == 0x10) {
                     // Chip erase
                     for (int i = 0; i < (1 << 21); ++i) {
                         cartridge_state.rom[i] = 0xFF;
                     }
+                    flash_dirty = true;
                 } else if (value == 0x30) {
                     // Sector erase
                     uint8_t sectorBits = ((address & (1 << 13)) >> 13) | ((cartridge_state.bank_mask & 0x7F) << 1);
@@ -308,6 +312,7 @@ void MemoryWrite(uint16_t address, uint8_t value) {
                         uint32_t x = 0x1FC000;
                         for (uint32_t i = 0; i < (1 << 14); ++i) { cartridge_state.rom[x] = 0xFF; ++x; }
                     }
+                    flash_dirty = true;
                 } else if (value == 0xA0) {
                     cartridge_state.write_mode = true;
                 } else if (value == 0x90) {
@@ -420,6 +425,7 @@ static bool load_rom(const uint8_t* data, size_t size) {
     cartridge_state.write_mode = false;
     cartridge_state.bank_shifter = 0;
     cartridge_state.bank_mask = 0;
+    flash_dirty = false;   // fresh cart: flash matches the loaded image
 
     switch (size) {
         case 8192:    loadedRomType = RomType::EEPROM8K;  break;
@@ -651,6 +657,34 @@ static void set_input_descriptors(void) {
     if (environ_cb) environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc);
 }
 
+// Expose every emulated RAM region to the frontend via SET_MEMORY_MAPS so cheats
+// and external tooling (e.g. romdev's memory / inspectSprites / audio inspectors)
+// can read GRAM (sprite RAM) and ACP audio RAM — not just the SYSTEM/VIDEO/SAVE
+// regions reachable through retro_get_memory_data. The 'start' addresses below are
+// flat tool-facing offsets (the real GameTank bus banks these), chosen not to
+// overlap; RETRO_MEMDESC_* select=0 leaves the frontend to treat them as opaque.
+static void set_memory_maps(void) {
+    if (!environ_cb) return;
+    static struct retro_memory_descriptor desc[4];
+    unsigned n = 0;
+    // System RAM (32 KB) at 0x000000.
+    desc[n++] = (struct retro_memory_descriptor){
+        RETRO_MEMDESC_SYSTEM_RAM, system_state.ram, 0, 0x000000, 0, 0, RAMSIZE, "RAM" };
+    // VRAM framebuffer pages (32 KB) at 0x010000.
+    desc[n++] = (struct retro_memory_descriptor){
+        RETRO_MEMDESC_VIDEO_RAM, system_state.vram, 0, 0x010000, 0, 0, VRAM_BUFFER_SIZE, "VRAM" };
+    // GRAM / sprite RAM (512 KB) at 0x100000.
+    desc[n++] = (struct retro_memory_descriptor){
+        RETRO_MEMDESC_VIDEO_RAM, system_state.gram, 0, 0x100000, 0, 0, GRAM_BUFFER_SIZE, "GRAM" };
+    // Audio coprocessor RAM (4 KB) at 0x200000.
+    if (AudioCoprocessor::singleton_acp_state)
+        desc[n++] = (struct retro_memory_descriptor){
+            0, AudioCoprocessor::singleton_acp_state->ram, 0, 0x200000, 0, 0, AUDIO_RAM_SIZE, "ACPRAM" };
+
+    struct retro_memory_map mmap = { desc, n };
+    environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mmap);
+}
+
 RETRO_API bool retro_load_game(const struct retro_game_info *game) {
     enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
     if (environ_cb && !environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt)) {
@@ -665,7 +699,11 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game) {
     check_variables();
     set_input_descriptors();
 
-    return load_rom((const uint8_t*)game->data, game->size);
+    if (!load_rom((const uint8_t*)game->data, game->size))
+        return false;
+
+    set_memory_maps();   // after load_rom — the ACP state exists by now
+    return true;
 }
 
 RETRO_API bool retro_load_game_special(unsigned, const struct retro_game_info *, size_t) {
@@ -718,12 +756,14 @@ RETRO_API size_t retro_get_memory_size(unsigned id) {
 // doc/PORT_NOTES.md "Open items".
 // ===========================================================================
 #define GT_STATE_MAGIC   0x47544B31u  // "GTK1"
-#define GT_STATE_VERSION 1
+#define GT_STATE_VERSION 2            // v2: + per-CPU IRQ scheduling state
 
 struct CpuRegs {
     uint8_t  A, X, Y, sp, status;
     uint16_t pc;
     uint8_t  freeze, illegalOpcode, waiting;
+    uint32_t irq_timer;   // private IRQ-scheduling state (via LIBRETRO accessors)
+    uint8_t  irq_line;
 };
 
 struct SaveBlob {
@@ -755,22 +795,37 @@ struct SaveBlob {
     // Timekeeper accumulators
     uint64_t total_cycles;
     uint64_t cycles_since_vsync;
+
+    // Set when the 2 MB flash image follows this struct (self-modifying FLASH2M
+    // cart). Avoids paying 2 MB on every state for the common read-only cart.
+    uint8_t  has_flash;
+    // (2 MB flash image, if has_flash, is appended after sizeof(SaveBlob))
 };
+
+#define GT_FLASH_SIZE (1u << 21)   // 2 MB
 
 static void grab_cpu_regs(mos6502 *cpu, CpuRegs *r) {
     r->A = cpu->A; r->X = cpu->X; r->Y = cpu->Y;
     r->sp = cpu->sp; r->status = cpu->status; r->pc = cpu->pc;
     r->freeze = cpu->freeze; r->illegalOpcode = cpu->illegalOpcode; r->waiting = cpu->waiting;
+    r->irq_timer = cpu->LR_GetIrqTimer();
+    r->irq_line  = cpu->LR_GetIrqLine() ? 1 : 0;
 }
 
 static void put_cpu_regs(mos6502 *cpu, const CpuRegs *r) {
     cpu->A = r->A; cpu->X = r->X; cpu->Y = r->Y;
     cpu->sp = r->sp; cpu->status = r->status; cpu->pc = r->pc;
     cpu->freeze = r->freeze; cpu->illegalOpcode = r->illegalOpcode; cpu->waiting = r->waiting;
+    // irq_gate is re-wired by the blitter/ACP, not serialized — restore only the
+    // schedulable timer + line.
+    cpu->LR_SetIrqState(r->irq_timer, r->irq_line != 0);
 }
 
 RETRO_API size_t retro_serialize_size(void) {
-    return sizeof(SaveBlob);
+    // Stable per-load size: include the flash tail iff this cart has dirtied its
+    // flash (frontends call this once and expect a fixed size, so key it on the
+    // cart having self-modified rather than toggling mid-session).
+    return sizeof(SaveBlob) + (flash_dirty ? GT_FLASH_SIZE : 0);
 }
 
 RETRO_API bool retro_serialize(void *data, size_t size) {
@@ -803,6 +858,13 @@ RETRO_API bool retro_serialize(void *data, size_t size) {
 
     b->total_cycles       = timekeeper.totalCyclesCount;
     b->cycles_since_vsync = timekeeper.cycles_since_vsync;
+
+    // Append the live 2 MB flash image for self-modifying FLASH2M carts.
+    b->has_flash = flash_dirty ? 1 : 0;
+    if (flash_dirty) {
+        if (size < sizeof(SaveBlob) + GT_FLASH_SIZE) return false;
+        memcpy((uint8_t*)data + sizeof(SaveBlob), cartridge_state.rom, GT_FLASH_SIZE);
+    }
     return true;
 }
 
@@ -810,6 +872,7 @@ RETRO_API bool retro_unserialize(const void *data, size_t size) {
     if (size < sizeof(SaveBlob)) return false;
     const SaveBlob *b = (const SaveBlob*)data;
     if (b->magic != GT_STATE_MAGIC || b->version != GT_STATE_VERSION) return false;
+    if (b->has_flash && size < sizeof(SaveBlob) + GT_FLASH_SIZE) return false;
 
     system_state.dma_control     = b->dma_control;
     system_state.dma_control_irq = b->dma_control_irq != 0;
@@ -834,6 +897,12 @@ RETRO_API bool retro_unserialize(const void *data, size_t size) {
 
     timekeeper.totalCyclesCount  = b->total_cycles;
     timekeeper.cycles_since_vsync = b->cycles_since_vsync;
+
+    // Restore the self-modified flash image if the state carried one.
+    if (b->has_flash) {
+        memcpy(cartridge_state.rom, (const uint8_t*)data + sizeof(SaveBlob), GT_FLASH_SIZE);
+        flash_dirty = true;
+    }
 
     // Repaint the XRGB surface from restored VRAM bytes.
     randomize_vram_surface();

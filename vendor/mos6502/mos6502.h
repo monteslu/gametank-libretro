@@ -269,4 +269,12 @@ public:
 		uint64_t& cycleCount,
 		CycleMethod cycleMethod = CYCLE_COUNT);
 	void Freeze();
+
+	// LIBRETRO: accessors for the private IRQ-scheduling state so a libretro core
+	// can capture/restore it in a save state. irq_gate is a pointer into another
+	// device (blitter / ACP) and is re-established by that device on load, so it
+	// is NOT serialized here — only the schedulable timer + line.
+	uint32_t LR_GetIrqTimer() const { return irq_timer; }
+	bool     LR_GetIrqLine()  const { return irq_line; }
+	void     LR_SetIrqState(uint32_t timer, bool line) { irq_timer = timer; irq_line = line; }
 };

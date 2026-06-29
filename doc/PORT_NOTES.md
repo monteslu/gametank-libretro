@@ -183,25 +183,28 @@ part of the standalone shell, not the core).
   `retro_get_system_av_info`; frontend resamples. `samples_per_frame` (233) comes
   from the ACP rate register; mono is duplicated to stereo S16 per frame.
 
-**Still open / deferred:**
-- **Save-state determinism is partial.** The blob captures SystemState,
-  CartridgeState scalars + `save_ram`, both CPUs' *public* registers, ACP RAM,
-  and the timekeeper accumulators. It does **not** capture the mos6502 *private*
-  IRQ-scheduling state (`irq_timer` / `irq_line` / `irq_gate`) — the header
-  exposes no accessors — nor the 2 MB flash image. Non-flash-write games are
-  deterministic; a state saved mid-blit-IRQ or on a self-modifying flash cart
-  may diverge. Fix needs a tiny mos6502.h accessor patch (a marked LIBRETRO
-  delta) and dirty-flash snapshotting.
-- **Flash write persistence** — `MemoryWrite`'s flash erase/program still runs
-  (carts can self-modify in RAM), but the upstream `.xor` snapshot on the `0x90`
-  lock command is a no-op; FLASH2M (non-SRAM) flash writes are not persisted by
-  the frontend. FLASH2M_RAM32K battery SRAM **is** exposed via
-  `RETRO_MEMORY_SAVE_RAM`.
-- **Memory descriptors** — `retro_get_memory_data` exposes SYSTEM_RAM, VIDEO_RAM
-  (VRAM) and SAVE_RAM. GRAM (sprite RAM) and ACP RAM have no standard
-  `RETRO_MEMORY_*` id; `RETRO_ENVIRONMENT_SET_MEMORY_MAPS` descriptors for all
-  four regions (so romdev's `memory`/`inspectSprites` see GRAM + audio RAM) are
-  not yet wired.
-- **RNG seed** — `retro_init` seeds `srand(0x6502)` for reproducibility;
-  `open_bus()` and uninitialized-RAM fill are therefore deterministic across
-  runs but not "true random". Fine for emulation, noted for completeness.
+**Resolved in state v2 (post-v0.1.0):**
+- **Save-state IRQ state** — `mos6502.h` gained marked LIBRETRO accessors
+  (`LR_GetIrqTimer/LR_GetIrqLine/LR_SetIrqState`); the blob now captures each
+  CPU's private `irq_timer` + `irq_line`. `irq_gate` is a pointer into the
+  blitter/ACP and is re-wired by those devices on load, so it is intentionally
+  not serialized. (This is the project's first marked vendor delta — re-apply it
+  after any `scripts/update-vendor.sh` bump.)
+- **Flash write persistence** — a `flash_dirty` flag is set on any FLASH2M
+  program/erase. When set, `retro_serialize` appends the full 2 MB flash image to
+  the blob (and `retro_serialize_size` accounts for it); restored on load. The
+  common read-only cart pays nothing — the tail only exists once a cart has
+  self-modified. FLASH2M_RAM32K battery SRAM is still also exposed via
+  `RETRO_MEMORY_SAVE_RAM` for cross-session persistence.
+- **Memory descriptors** — `retro_load_game` now calls
+  `RETRO_ENVIRONMENT_SET_MEMORY_MAPS` with four descriptors: RAM (0x000000),
+  VRAM (0x010000), GRAM/sprite RAM (0x100000), ACP audio RAM (0x200000). So
+  cheats + romdev's `memory`/`inspectSprites`/audio tools see all four regions,
+  not just the three reachable via `retro_get_memory_data`.
+
+**Not a bug (noted for completeness):**
+- **RNG seed** — `retro_init` seeds `srand(0x6502)` *on purpose*: `open_bus()` and
+  the uninitialized-RAM fill are then deterministic across runs, which is the
+  correct behavior for a reproducible emulator (real hardware boots with
+  arbitrary RAM, but determinism makes save states / testing reliable). Nothing
+  to change.
