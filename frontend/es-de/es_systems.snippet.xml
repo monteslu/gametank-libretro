@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!--
+  ES-DE custom system snippet for gametank-libretro (GameTank console).
+
+  This is a SNIPPET: copy the <system>...</system> block below (everything between
+  the BEGIN-SYSTEM / END-SYSTEM markers) into ES-DE's custom systems file, inside
+  its <systemList>, without disturbing any other systems already there:
+    ~/ES-DE/custom_systems/es_systems.xml           (native ES-DE)
+    ~/retrodeck/ES-DE/custom_systems/es_systems.xml (RetroDECK flatpak)
+
+  Conventions:
+   - <command> uses %CORE_RETROARCH% (ES-DE resolves it to the frontend's cores
+     dir). If the core lives somewhere %CORE_RETROARCH% does not point — e.g.
+     RetroDECK's bundled cores dir is read-only, so the .so is kept in a writable
+     host dir — replace it with an absolute -L path to the .so.
+   - <theme>gametank</theme> is a name no stock theme defines, so ES-DE shows our
+     <fullname> + a dropped-in logos/gametank.svg instead of borrowing another
+     system's identity. (See frontend/es-de/README.md.)
+   - .gtr games go in %ROMPATH%/gametank/. A full ES-DE/RetroDECK restart is needed
+     (the systems config is cached at startup; reloading the gamelist is not enough).
+-->
+<!-- BEGIN-SYSTEM -->
+  <system>
+    <name>gametank</name>
+    <fullname>GameTank</fullname>
+    <path>%ROMPATH%/gametank</path>
+    <extension>.gtr .GTR</extension>
+    <command label="GameTank (libretro)">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/gametank_libretro.so %ROM%</command>
+    <platform>pc</platform>
+    <theme>gametank</theme>
+  </system>
+<!-- END-SYSTEM -->

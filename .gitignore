@@ -1,0 +1,12 @@
+build/
+dist/
+*.o
+*.d
+*.so
+*.dll
+*.dylib
+*.bc
+*.wasm
+*.a
+commit_hash.txt
+.DS_Store

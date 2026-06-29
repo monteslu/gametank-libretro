@@ -1,0 +1,13 @@
+GameTankEmulator core sources vendored from:
+  repo:   https://github.com/clydeshaffer/GameTankEmulator
+  commit: e7e25e2daf5da5d041ae8dc48f740a362c1e66ff
+  date:   2026-06-03 22:17:17 -0400
+  license: MIT (Copyright 2020 Clyde Shaffer)
+
+Vendored (reusable hardware emulation units only):
+  mos6502/  blitter  audio_coprocessor  palette  timekeeper
+  system_state  emulator_config  game_config  gametank_palette
+
+NOT vendored (standalone-app shell the libretro core replaces):
+  gte.cpp (SDL window + main loop), imgui/, devtools/, tinyfd/,
+  whereami/, ui/, font.cpp, joystick_*  -- see src/libretro.cpp instead

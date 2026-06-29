@@ -1,0 +1,37 @@
+# Software Information
+display_name = "GameTank"
+categories = "Game"
+authors = "Clyde Shaffer|monteslu"
+corename = "GameTank"
+supported_extensions = "gtr"
+license = "MIT"
+permissions = ""
+display_version = "0.1.0"
+
+# Hardware Information
+manufacturer = "Clyde Shaffer"
+systemname = "GameTank"
+systemid = "gametank"
+
+# BIOS / Firmware
+firmware_count = 0
+
+# Libretro Features
+savestate = "true"
+savestate_features = "serialized"
+cheats = "false"
+input_descriptors = "true"
+memory_descriptors = "false"
+libretro_saves = "true"
+core_options = "true"
+core_options_version = "2.0"
+load_subsystem = "false"
+supports_no_game = "false"
+single_purpose = "false"
+database = "GameTank"
+hw_render = "false"
+needs_fullpath = "false"
+disk_control = "false"
+is_experimental = "true"
+
+description = "Emulator for the GameTank, an open-source 8-bit console by Clyde Shaffer built from twin WDC 65C02 CPUs (3.5MHz main + 14MHz audio coprocessor), a blitter-driven 128x128 framebuffer, and 2MB flash cartridges. Loads .gtr cartridges. Core emulation ported from the upstream GameTankEmulator."

@@ -1,0 +1,114 @@
+name: Build core
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# GameTank's core is dependency-light: no libnode, no GL, no submodules, no
+# prebuilt artifacts to fetch. Each job is just "compiler + our Makefile", so the
+# matrix stays lean. Where the built lib matches the runner arch we also run the
+# dlopen harness against a real .gtr (catches a broken CORE, not just a broken link).
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04        # older image => lower glibc floor for the .so
+            lib: gametank_libretro.so
+            make: make
+            harness: true
+          - platform: linux-aarch64
+            runner: ubuntu-22.04-arm
+            lib: gametank_libretro.so
+            make: make
+            harness: true
+          - platform: macos-aarch64
+            runner: macos-14
+            lib: gametank_libretro.dylib
+            make: make
+            harness: true
+          - platform: macos-x86_64
+            runner: macos-14             # cross-compile x86_64 on the arm64 runner
+            lib: gametank_libretro.dylib
+            make: make CXXFLAGS_EXTRA=-arch\ x86_64 LDFLAGS_EXTRA=-arch\ x86_64
+            harness: false               # can't run an x86_64 dylib on the arm64 host
+          - platform: windows-x86_64
+            runner: windows-2022
+            lib: gametank_libretro.dll
+            make: make
+            harness: false
+          - platform: android-arm64
+            runner: ubuntu-22.04
+            lib: gametank_libretro.so
+            make: make platform=android
+            harness: false               # NDK cross-build, no on-host run
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux/macOS: clang++ (the Makefile default) is already present.
+      # Windows: use the LLVM/clang++ that the runner ships (MSYS not needed —
+      # our core links only the C/C++ runtimes, no platform libs).
+      - name: Set up clang (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          install: mingw-w64-clang-x86_64-clang make zip
+
+      - name: Build
+        if: matrix.platform != 'android-arm64'
+        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        run: ${{ matrix.make }}
+
+      - name: Build (Android NDK cross)
+        if: matrix.platform == 'android-arm64'
+        shell: bash
+        run: |
+          # $ANDROID_NDK_LATEST_HOME is preinstalled on ubuntu runners.
+          make platform=android NDK="$ANDROID_NDK_LATEST_HOME" API=24
+
+      - name: Harness (render a real .gtr, assert non-blank)
+        if: matrix.harness
+        shell: bash
+        run: |
+          make test
+          # tutorial/colortest ROMs are not in this repo; fetch a known .gtr from
+          # the upstream emulator repo for a deterministic smoke test.
+          curl -sL -o /tmp/hello.gtr \
+            https://raw.githubusercontent.com/clydeshaffer/GameTankEmulator/master/roms/hello.gtr
+          ./test/harness /tmp/hello.gtr 30
+
+      - name: Package
+        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        run: |
+          mkdir -p dist
+          strip "${{ matrix.lib }}" 2>/dev/null || true
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            zip -j "dist/gametank_libretro-${{ matrix.platform }}.zip" "${{ matrix.lib }}" gametank_libretro.info
+          else
+            zip -j "dist/gametank_libretro-${{ matrix.platform }}.zip" "${{ matrix.lib }}" gametank_libretro.info
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gametank_libretro-${{ matrix.platform }}
+          path: dist/*.zip
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: gametank_libretro-*.zip
