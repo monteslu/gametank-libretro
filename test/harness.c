@@ -134,21 +134,20 @@ int main(int argc, char **argv) {
     int frames = (argc > 2) ? atoi(argv[2]) : 10;
 
     // Core path: $GAMETANK_CORE if set, else try the platform's library names.
+    // NULL entries (e.g. unset env var) are skipped, not treated as end-of-list.
     const char *candidates[] = {
         getenv("GAMETANK_CORE"),
         "./gametank_libretro.so",      // Linux / Android
         "./gametank_libretro.dylib",   // macOS
         "./gametank_libretro.dll",     // Windows
-        NULL
     };
-    const char *sopath = NULL;
-    for (int i = 0; candidates[i]; i++) {
-        if (i == 0 && !candidates[0]) continue;        // GAMETANK_CORE unset
+    const int n_candidates = sizeof(candidates) / sizeof(candidates[0]);
+    for (int i = 0; i < n_candidates; i++) {
+        if (!candidates[i]) continue;                  // unset env var, skip
         g_handle = dlopen(candidates[i], RTLD_NOW | RTLD_LOCAL);
-        if (g_handle) { sopath = candidates[i]; break; }
+        if (g_handle) break;
     }
     if (!g_handle) { fprintf(stderr, "dlopen failed (tried .so/.dylib/.dll): %s\n", dlerror()); return 1; }
-    (void)sopath;
 
     set_env_fn   retro_set_environment        = (set_env_fn)  load_sym("retro_set_environment");
     set_video_fn retro_set_video_refresh      = (set_video_fn)load_sym("retro_set_video_refresh");
