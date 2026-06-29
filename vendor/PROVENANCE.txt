@@ -12,6 +12,14 @@ NOT vendored (standalone-app shell the libretro core replaces):
   gte.cpp (SDL window + main loop), imgui/, devtools/, tinyfd/,
   whereami/, ui/, font.cpp, joystick_*  -- see src/libretro.cpp instead
 
+LOCAL DELTAS from upstream (re-apply after an update-vendor.sh --apply):
+  - mos6502/mos6502.h : added marked LIBRETRO accessors for the private IRQ state
+      (LR_GetIrqTimer / LR_GetIrqLine / LR_SetIrqState) so save states can
+      capture/restore irq_timer + irq_line. update-vendor.sh flags this file as
+      differing -- that is EXPECTED; merge the accessors back, don't blind-overwrite.
+  - SDL_inc.h : routes to vendor/sdl_shim.h under LIBRETRO_BUILD. It is NOT pulled
+      by update-vendor.sh (it's our file, not an upstream copy).
+
 To re-pull these files from the pinned commit (reproducible, with a diff):
   scripts/update-vendor.sh            # dry-run, shows what differs
   scripts/update-vendor.sh --apply    # overwrite vendor/ from the pin
