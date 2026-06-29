@@ -67,16 +67,33 @@ ifeq ($(origin CXX),default)
   CXX := clang++
 endif
 
-ifeq ($(platform),emscripten)
-  # ---- Emscripten / WASM ----
+ifeq ($(platform),retroemu)
+  # ---- retroemu host (Emscripten MODULARIZE+ES6 factory) ----
+  # retroemu (and its retroterm launcher) load a core as an ES6-module factory
+  # named create_<core> that exposes the libretro C ABI + a few runtime helpers
+  # (addFunction/HEAPU8/...). This matches retroemu/scripts/build-core.sh's flags.
+  # Emits BOTH gametank_libretro.js (glue) and .wasm.
+  CXX        := emcc
+  OBJEXT     := .em.o
+  OUTPUT     := $(TARGET).js
+  EM_EXPORTS := '["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+  EM_RUNTIME := '["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue"]'
+  EMFLAGS    := -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=create_gametank \
+                -s ENVIRONMENT=node -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=33554432 \
+                -s MAXIMUM_MEMORY=268435456 -s ALLOW_TABLE_GROWTH=1 -s INVOKE_RUN=0 \
+                -s EXPORTED_FUNCTIONS=$(EM_EXPORTS) -s EXPORTED_RUNTIME_METHODS=$(EM_RUNTIME)
+  CXXFLAGS   := $(CXXSTD) $(OPTIM) $(WARN) $(DEFINES) $(INCLUDES) -fPIC
+  LDFLAGS    := $(OPTIM) $(EMFLAGS)
+  LINK       := $(CXX)
+else ifeq ($(platform),emscripten)
+  # ---- Emscripten / WASM (bare side module) ----
   # Modern emcc emits real wasm object files from -c (not LLVM bitcode). Use a
   # platform-tagged object extension (.em.o) so native (clang) and emscripten
   # object files NEVER collide — building one target must not leave stale objects
   # the other target's linker would mis-detect (wasm-ld: "unknown file type").
+  # This is a bare SIDE_MODULE .wasm (no glue JS); for retroemu use platform=retroemu.
   CXX        := emcc
   OBJEXT     := .em.o
-  # SIDE_MODULE emits a bare wasm binary to -o (loadable the way retroemu loads
-  # its WASM cores); name it .wasm so it is obviously the module, not glue JS.
   OUTPUT     := $(TARGET).wasm
   EMFLAGS    := -s WASM=1 -s SIDE_MODULE=1
   CXXFLAGS   := $(CXXSTD) $(OPTIM) $(WARN) $(DEFINES) $(INCLUDES) -fPIC
