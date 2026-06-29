@@ -157,8 +157,14 @@ clean:
 	rm -f test/harness test/harness.o
 
 # Native-only dlopen smoke test (see test/harness.c).
+# macOS keeps dlopen/dlsym in libc — no -ldl there (it errors). Linux needs -ldl.
+ifeq ($(shell uname -s),Darwin)
+  DL_LIB :=
+else
+  DL_LIB := -ldl
+endif
 test: all test/harness
 	@echo "Run: ./test/harness <rom.gtr>"
 
 test/harness: test/harness.c
-	$(CC) -O2 -o $@ $< -ldl
+	$(CC) -O2 -o $@ $< $(DL_LIB)

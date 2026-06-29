@@ -62,7 +62,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Linux/macOS: clang++ (the Makefile default) is already present.
       # Windows: install the LLVM/clang++ toolchain + make + zip via msys2.
@@ -97,7 +97,7 @@ jobs:
           strip "${{ matrix.lib }}" 2>/dev/null || true
           zip -j "dist/gametank_libretro-${{ matrix.platform }}.zip" "${{ matrix.lib }}" gametank_libretro.info
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gametank_libretro-${{ matrix.platform }}
           path: dist/*.zip
@@ -109,8 +109,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { merge-multiple: true }
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: gametank_libretro-*.zip

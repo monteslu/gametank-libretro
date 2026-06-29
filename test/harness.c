@@ -133,9 +133,22 @@ int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: %s <rom.gtr> [frames]\n", argv[0]); return 1; }
     int frames = (argc > 2) ? atoi(argv[2]) : 10;
 
-    const char *sopath = "./gametank_libretro.so";
-    g_handle = dlopen(sopath, RTLD_NOW | RTLD_LOCAL);
-    if (!g_handle) { fprintf(stderr, "dlopen %s failed: %s\n", sopath, dlerror()); return 1; }
+    // Core path: $GAMETANK_CORE if set, else try the platform's library names.
+    const char *candidates[] = {
+        getenv("GAMETANK_CORE"),
+        "./gametank_libretro.so",      // Linux / Android
+        "./gametank_libretro.dylib",   // macOS
+        "./gametank_libretro.dll",     // Windows
+        NULL
+    };
+    const char *sopath = NULL;
+    for (int i = 0; candidates[i]; i++) {
+        if (i == 0 && !candidates[0]) continue;        // GAMETANK_CORE unset
+        g_handle = dlopen(candidates[i], RTLD_NOW | RTLD_LOCAL);
+        if (g_handle) { sopath = candidates[i]; break; }
+    }
+    if (!g_handle) { fprintf(stderr, "dlopen failed (tried .so/.dylib/.dll): %s\n", dlerror()); return 1; }
+    (void)sopath;
 
     set_env_fn   retro_set_environment        = (set_env_fn)  load_sym("retro_set_environment");
     set_video_fn retro_set_video_refresh      = (set_video_fn)load_sym("retro_set_video_refresh");
