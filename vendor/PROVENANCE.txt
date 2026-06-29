@@ -11,3 +11,8 @@ Vendored (reusable hardware emulation units only):
 NOT vendored (standalone-app shell the libretro core replaces):
   gte.cpp (SDL window + main loop), imgui/, devtools/, tinyfd/,
   whereami/, ui/, font.cpp, joystick_*  -- see src/libretro.cpp instead
+
+To re-pull these files from the pinned commit (reproducible, with a diff):
+  scripts/update-vendor.sh            # dry-run, shows what differs
+  scripts/update-vendor.sh --apply    # overwrite vendor/ from the pin
+The file manifest + commit pin live in scripts/update-vendor.sh.
