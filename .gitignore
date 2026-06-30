@@ -10,3 +10,9 @@ dist/
 *.a
 commit_hash.txt
 .DS_Store
+
+# test harness binary (built via `make test`)
+test/harness
+
+# downloaded test ROMs (not part of the repo; not ours to ship)
+testroms/

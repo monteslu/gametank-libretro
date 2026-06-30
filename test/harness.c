@@ -1,3 +1,4 @@
+#include <math.h>
 // LIBRETRO: test/harness.c
 //
 // Minimal dlopen smoke test for gametank_libretro.so. Not a full frontend —
@@ -99,9 +100,17 @@ static void dump_ppm(const char *path) {
     fclose(o);
 }
 
+static int16_t audio_min = 32767, audio_max = -32768;
+static double  audio_sumsq = 0; static uint64_t audio_count = 0;
 static void   cb_audio_sample(int16_t l, int16_t r) { (void)l; (void)r; }
 static size_t cb_audio_batch(const int16_t *d, size_t frames) {
-    (void)d; total_audio_frames += frames; return frames;
+    for (size_t i = 0; i < frames * 2; i++) {
+        int16_t s = d[i];
+        if (s < audio_min) audio_min = s;
+        if (s > audio_max) audio_max = s;
+        audio_sumsq += (double)s * s; audio_count++;
+    }
+    total_audio_frames += frames; return frames;
 }
 static void    cb_poll(void) {}
 static int16_t cb_input(unsigned p, unsigned dev, unsigned idx, unsigned id) {
@@ -195,6 +204,8 @@ int main(int argc, char **argv) {
 
     // Dump the final frame for visual inspection if a 3rd arg is given.
     if (argc > 3) { dump_ppm(argv[3]); printf("wrote %s (%ux%u)\n", argv[3], last_w, last_h); }
+
+    if (audio_count) { double rms = sqrt(audio_sumsq/audio_count); fprintf(stderr, "audio: min=%d max=%d rms=%.0f (signed S16; want min<0<max, rms a few thousand)\n", audio_min, audio_max, rms); }
 
     // Serialize round-trip sanity.
     size_t ss = retro_serialize_size();

@@ -541,6 +541,59 @@ static double dac_sample_rate() {
     return 315000000.0 / (88.0 * 256.0);   // ~13967.6 Hz
 }
 
+// 8-bit DAC sample -> S16 gain. The raw DAC byte (0..255) is high-passed below to
+// remove DC, so it ends up centered near 0; ~180 maps the ±128 swing to roughly
+// ±23000 with headroom.
+#define GT_AUDIO_GAIN 180
+
+// DC-blocking high-pass (models the GameTank's output coupling capacitor). The
+// raw 8-bit DAC carries a large, game-dependent DC bias (e.g. it can hover near 0
+// rather than swinging around mid-scale). On real hardware a series cap removes
+// that bias; without it we'd emit a constant DC rail — a loud thump/buzz, which
+// is exactly the "horrible sound". One-pole: y[n] = x[n] - x[n-1] + R*y[n-1].
+// R≈0.9995 at ~14 kHz → ~2 Hz corner, inaudible yet kills the offset.
+static double dc_x1 = 0.0, dc_y1 = 0.0;
+static void gt_audio_reset_filter(void) { dc_x1 = 0.0; dc_y1 = 0.0; }
+
+// Correct-math replacement for AudioCoprocessor::fill_audio (see retro_run for
+// why the vendored one can't feed libretro's S16 sink). Advances the audio CPU
+// with IDENTICAL timing, but emits DC-blocked, properly-signed, sanely-scaled
+// interleaved stereo S16 directly. `out` must hold n*2 int16_t.
+static void gt_fill_audio(ACPState *state, int16_t *out, uint32_t n) {
+    const double R = 0.9995;
+    if (state->isEmulationPaused || state->isMuted) {
+        for (uint32_t i = 0; i < n * 2; i++) out[i] = 0;
+        return;   // original zero-fills + returns without advancing; match it
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        double x = (double)state->dacReg;          // raw 0..255 (carries DC bias)
+        double y = x - dc_x1 + R * dc_y1;          // DC-blocking high-pass
+        dc_x1 = x; dc_y1 = y;
+
+        int s = (int)(y * GT_AUDIO_GAIN);          // scale the AC-coupled signal
+        if (s >  32767) s =  32767;
+        if (s < -32768) s = -32768;
+        out[i * 2]     = (int16_t)s;
+        out[i * 2 + 1] = (int16_t)s;
+
+        // --- CPU-advance loop: byte-identical to fill_audio() ---
+        state->irqCounter -= state->clksPerHostSample;
+        if (state->irqCounter < 0) {
+            if (state->resetting) {
+                state->resetting = false;
+                state->cpu->Reset();
+            }
+            state->irqCounter += state->irqRate;
+            state->cycle_counter = 0;
+            if (state->running) {
+                state->cpu->IRQ();
+                state->cpu->ClearIRQ();
+                state->cpu->Run(state->cycles_per_sample, state->cycle_counter);
+            }
+        }
+    }
+}
+
 RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info) {
     memset(info, 0, sizeof(*info));
     info->geometry.base_width   = GT_WIDTH;
@@ -599,22 +652,26 @@ RETRO_API void retro_run(void) {
     blitter->pixels_this_frame = 0;
 
     // --- audio: pull this frame's samples from the ACP --------------------
-    // fill_audio() advances the audio CPU and emits S16 mono; duplicate to
-    // stereo for libretro. samples_per_frame is set by the ACP rate register.
+    // We DON'T call the vendored AudioCoprocessor::fill_audio here: its sample
+    // math is broken for libretro's signed S16 sink. It writes through a
+    // uint16_t* and does `s -= 128` (unsigned underflow on the bottom half of the
+    // 8-bit DAC range → huge positive garbage) then `*= volume` (256 → full-scale
+    // ±32768, clips). The original SDL app masked this via its device format; fed
+    // raw into audio_batch_cb it produces the harsh/noisy sound.
+    //
+    // gt_fill_audio() below mirrors fill_audio's CPU-advance timing EXACTLY (so
+    // emulation is unchanged) but emits correctly-signed, sanely-scaled S16:
+    //   sample = (dacReg - 128) * GT_AUDIO_GAIN   // centered, signed
+    // GT_AUDIO_GAIN=128 maps the 8-bit DAC's ±128 to ±16384 — half-scale, with
+    // headroom so peaks don't clip.
     {
         ACPState *acp = AudioCoprocessor::singleton_acp_state;
         uint32_t n = acp->samples_per_frame;
         if (n == 0) n = (uint32_t)(dac_sample_rate() / 60.0 + 0.5);  // ~233
         if (n > 2048) n = 2048;
 
-        static int16_t mono[2048];
-        AudioCoprocessor::fill_audio(acp, (uint8_t*)mono, (int)(n * sizeof(int16_t)));
-
         static int16_t stereo[2048 * 2];
-        for (uint32_t i = 0; i < n; i++) {
-            stereo[i * 2]     = mono[i];
-            stereo[i * 2 + 1] = mono[i];
-        }
+        gt_fill_audio(acp, stereo, n);
         if (audio_batch_cb) audio_batch_cb(stereo, n);
     }
 
