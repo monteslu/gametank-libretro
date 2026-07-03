@@ -576,14 +576,20 @@ static void gt_fill_audio(ACPState *state, int16_t *out, uint32_t n) {
         out[i * 2]     = (int16_t)s;
         out[i * 2 + 1] = (int16_t)s;
 
-        // --- CPU-advance loop: byte-identical to fill_audio() ---
+        // --- CPU-advance loop ---
+        // Upstream fill_audio() fires at most ONE sample-IRQ per host sample,
+        // which is fine when the host rate ~= the DAC rate. Under this shim
+        // clksPerHostSample (1024) >> irqRate (255), so the int16 counter
+        // free-fell ~769/sample until it wrapped, starving the ACP of IRQs
+        // for ~32 of every ~75 host samples (audible 187 Hz chop + low notes
+        // reading flat). Let the ACP catch up fully each host sample instead.
         state->irqCounter -= state->clksPerHostSample;
-        if (state->irqCounter < 0) {
+        while (state->irqCounter < 0) {
             if (state->resetting) {
                 state->resetting = false;
                 state->cpu->Reset();
             }
-            state->irqCounter += state->irqRate;
+            state->irqCounter += (state->irqRate ? state->irqRate : 255);
             state->cycle_counter = 0;
             if (state->running) {
                 state->cpu->IRQ();
