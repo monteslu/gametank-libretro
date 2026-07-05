@@ -819,7 +819,8 @@ RETRO_API size_t retro_get_memory_size(unsigned id) {
 // doc/PORT_NOTES.md "Open items".
 // ===========================================================================
 #define GT_STATE_MAGIC   0x47544B31u  // "GTK1"
-#define GT_STATE_VERSION 2            // v2: + per-CPU IRQ scheduling state
+#define GT_STATE_VERSION 3            // v3: + blitter engine state (v2 loads
+                                      //     get an idle blitter + rebuilt surface)
 
 struct CpuRegs {
     uint8_t  A, X, Y, sp, status;
@@ -858,6 +859,10 @@ struct SaveBlob {
     // Timekeeper accumulators
     uint64_t total_cycles;
     uint64_t cycles_since_vsync;
+
+    // Blitter engine (v3): params/counters/phase flags/GRAM quadrant latch.
+    // Raw bytes of Blitter::LRState (16 bytes, fixed layout).
+    uint8_t  blitter_state[16];
 
     // Set when the 2 MB flash image follows this struct (self-modifying FLASH2M
     // cart). Avoids paying 2 MB on every state for the common read-only cart.
@@ -922,6 +927,12 @@ RETRO_API bool retro_serialize(void *data, size_t size) {
     b->total_cycles       = timekeeper.totalCyclesCount;
     b->cycles_since_vsync = timekeeper.cycles_since_vsync;
 
+    {
+        Blitter::LRState bs;
+        blitter->LR_GetState(&bs);
+        memcpy(b->blitter_state, &bs, sizeof(bs));
+    }
+
     // Append the live 2 MB flash image for self-modifying FLASH2M carts.
     b->has_flash = flash_dirty ? 1 : 0;
     if (flash_dirty) {
@@ -934,7 +945,8 @@ RETRO_API bool retro_serialize(void *data, size_t size) {
 RETRO_API bool retro_unserialize(const void *data, size_t size) {
     if (size < sizeof(SaveBlob)) return false;
     const SaveBlob *b = (const SaveBlob*)data;
-    if (b->magic != GT_STATE_MAGIC || b->version != GT_STATE_VERSION) return false;
+    if (b->magic != GT_STATE_MAGIC) return false;
+    if (b->version != GT_STATE_VERSION && b->version != 2) return false;
     if (b->has_flash && size < sizeof(SaveBlob) + GT_FLASH_SIZE) return false;
 
     system_state.dma_control     = b->dma_control;
@@ -960,6 +972,19 @@ RETRO_API bool retro_unserialize(const void *data, size_t size) {
 
     timekeeper.totalCyclesCount  = b->total_cycles;
     timekeeper.cycles_since_vsync = b->cycles_since_vsync;
+
+    // Blitter engine: v3 restores it exactly (mid-flight blits, phase flags,
+    // the GRAM quadrant latch). A v2 state predates this — leave the engine
+    // idle rather than half-restored.
+    {
+        Blitter::LRState bs;
+        if (b->version >= 3) {
+            memcpy(&bs, b->blitter_state, sizeof(bs));
+        } else {
+            memset(&bs, 0, sizeof(bs));
+        }
+        blitter->LR_SetState(&bs, b->total_cycles);
+    }
 
     // Restore the self-modified flash image if the state carried one.
     if (b->has_flash) {

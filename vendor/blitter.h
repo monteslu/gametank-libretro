@@ -57,6 +57,19 @@ public:
     
     uint8_t gram_mid_bits;
 
+    // LIBRETRO: full engine state for save states (params, counters, phase
+    // flags, the GRAM quadrant latch). Missing this made every state load
+    // desync mid-flight blits and CPU->GRAM write routing (rewind/runahead/
+    // autostate corruption). 16 bytes, fixed layout.
+    struct LRState {
+        uint8_t counters[6];   // VX, VY, GX, GY, W, H
+        uint8_t params[8];
+        uint8_t flags;         // bit0 trigger, bit1 init, bit2 irq, bit3 running
+        uint8_t mid_bits;
+    };
+    void LR_GetState(LRState *s);
+    void LR_SetState(const LRState *s, uint64_t now);
+
     Blitter(mos6502*& cpu_core, Timekeeper* timekeeper, SystemState* system_state, SDL_Surface*& vram_surface) : cpu_core(cpu_core), timekeeper(timekeeper), system_state(system_state), vram_surface(vram_surface) {};
 
     void SetParam(uint8_t address, uint8_t value);

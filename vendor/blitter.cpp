@@ -18,6 +18,31 @@ void put_pixel32( SDL_Surface *surface, int x, int y, Uint32 pixel )
     pixels[ ( y * surface->w ) + x ] = pixel;
 }
 
+void Blitter::LR_GetState(LRState *s) {
+    s->counters[0] = counterVX; s->counters[1] = counterVY;
+    s->counters[2] = counterGX; s->counters[3] = counterGY;
+    s->counters[4] = counterW;  s->counters[5] = counterH;
+    for (int i = 0; i < DMA_PARAMS_COUNT; i++) s->params[i] = params[i];
+    s->flags = (trigger ? 1 : 0) | (init ? 2 : 0) | (irq ? 4 : 0) | (running ? 8 : 0);
+    s->mid_bits = gram_mid_bits;
+}
+
+void Blitter::LR_SetState(const LRState *s, uint64_t now) {
+    counterVX = s->counters[0]; counterVY = s->counters[1];
+    counterGX = s->counters[2]; counterGY = s->counters[3];
+    counterW  = s->counters[4]; counterH  = s->counters[5];
+    for (int i = 0; i < DMA_PARAMS_COUNT; i++) params[i] = s->params[i];
+    trigger = (s->flags & 1) != 0;
+    init    = (s->flags & 2) != 0;
+    irq     = (s->flags & 4) != 0;
+    running = (s->flags & 8) != 0;
+    gram_mid_bits = s->mid_bits;
+    // align the lazy clock to the restored timeline: pending work between the
+    // save point and "now" either re-executes from the restored counters or
+    // was never scheduled — a stale delta must not double-run it
+    last_updated_cycle = now;
+}
+
 void Blitter::SetParam(uint8_t address, uint8_t value) {
     if((address % DMA_PARAMS_COUNT) == PARAM_TRIGGER) {
         trigger = value & 1;
