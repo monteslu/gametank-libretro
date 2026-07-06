@@ -124,6 +124,21 @@ static InputShim *joysticks = &joysticks_obj;
 // ===========================================================================
 static retro_environment_t       environ_cb;
 static retro_video_refresh_t     video_cb;
+#ifdef GT_PROFILE
+uint32_t gt_prof[256];
+uint8_t  gt_prof_last_cycles;
+uint16_t gt_pchist[2048];
+uint16_t gt_pchist_i;
+// wasm builds can't see host env vars (getenv reads the virtual env), so
+// the profile window is set through an exported call instead
+static int gt_prof_from = 0, gt_prof_at = 400;
+static int gt_watch_addr = -1;
+extern "C" RETRO_API void gt_prof_config(int from, int at) {
+    gt_prof_from = from;
+    gt_prof_at = at;
+}
+extern "C" RETRO_API void gt_watch_config(int addr) { gt_watch_addr = addr; }
+#endif
 static retro_audio_sample_t      audio_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
 static retro_input_poll_t        input_poll_cb;
@@ -266,6 +281,20 @@ uint8_t MemoryRead(uint16_t address) {
 }
 
 void MemoryWrite(uint16_t address, uint8_t value) {
+#ifdef GT_PROFILE
+    // gt_watch_config: trap writes to one RAM address, print the writer's pc
+    if ((int)address == gt_watch_addr && cpu_core) {
+        static int hits = 0;
+        if (hits < 24) {
+            hits++;
+            fprintf(stderr, "[WATCH] write %02x to %04x from pc~%04x sp=%02x stk:",
+                    value, address, cpu_core->pc, cpu_core->sp);
+            for (int i = cpu_core->sp + 1; i <= 0xFF && i <= cpu_core->sp + 8; i++)
+                fprintf(stderr, " %02x", system_state.ram[0x100 + i]);
+            fprintf(stderr, "\n");
+        }
+    }
+#endif
     if (address & 0x8000) {
         if (loadedRomType == RomType::FLASH2M_RAM32K) {
             if (!(address & 0x4000)) {
@@ -412,6 +441,9 @@ static void init_emulator() {
 
     soundcard = new AudioCoprocessor();
     cpu_core  = new mos6502(MemoryRead, MemoryWrite, CPUStopped, nullptr);
+#ifdef GT_PROFILE
+    cpu_core->lr_profile = true;
+#endif
     cpu_core->Reset();
     blitter   = new Blitter(cpu_core, &timekeeper, &system_state, vram_surface);
 
@@ -681,6 +713,21 @@ RETRO_API void retro_run(void) {
         if (audio_batch_cb) audio_batch_cb(stereo, n);
     }
 
+#ifdef GT_PROFILE
+    { static int pf = 0;
+      ++pf;
+      if (pf == gt_prof_from) {
+        extern uint32_t gt_prof[256];
+        memset(gt_prof, 0, sizeof(gt_prof));
+      }
+      if (pf == gt_prof_at) {
+        extern uint32_t gt_prof[256];
+        fprintf(stderr, "[PROF]\n");
+        for (int i = 0; i < 256; i++)
+            if (gt_prof[i]) fprintf(stderr, "%02x %u\n", i, gt_prof[i]);
+        fprintf(stderr, "[PROFEND]\n");
+      } }
+#endif
     // --- present the active VRAM page -------------------------------------
     // src.y = DMA_VID_OUT_PAGE_BIT ? GT_HEIGHT : 0 (the displayed 128x128 page
     // in the 128x256 framebuffer).

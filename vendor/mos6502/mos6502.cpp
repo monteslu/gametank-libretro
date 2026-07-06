@@ -1305,6 +1305,19 @@ void mos6502::Run(
 		} else if(irq_line) {
 			IRQ();
 		}
+#ifdef GT_PROFILE
+		// cycle-proportional PC histogram (MAIN cpu only; the ACP shares
+		// this class and would flood the counts on audio carts)
+		if (lr_profile) {
+			extern uint32_t gt_prof[256];
+			extern uint8_t  gt_prof_last_cycles;
+			gt_prof[(pc >> 8) & 0xFF] += gt_prof_last_cycles;
+			// rolling pc history, dumped at the first illegal opcode
+			extern uint16_t gt_pchist[2048];
+			extern uint16_t gt_pchist_i;
+			gt_pchist[gt_pchist_i++ & 2047] = pc;
+		}
+#endif
 		// fetch
 		if(Sync == NULL) {
 			opcode = Read(pc++);
@@ -1324,9 +1337,42 @@ void mos6502::Run(
 		Exec(instr);
 		if(illegalOpcode) {
 			illegalOpcodeSrc = opcode;
+#ifdef GT_PROFILE
+			if (lr_profile) {
+				static bool reported = false;
+				if (!reported) {
+					reported = true;
+					fprintf(stderr, "[CRASH] illegal opcode %02x at pc=%04x sp=%02x\n",
+					        opcode, (unsigned)(pc - 1), sp);
+					fprintf(stderr, "[CRASH] stack:");
+					for (int i = sp + 1; i <= 0xFF; i++)
+						fprintf(stderr, " %02x", Read(0x100 + i));
+					fprintf(stderr, "\n[CRASH] last control transfers (oldest first):");
+					{
+						extern uint16_t gt_cthist[512][2];
+						extern uint16_t gt_cthist_i;
+						for (int i = 0; i < 512; i++) {
+							int k = (gt_cthist_i + i) & 511;
+							fprintf(stderr, " %04x>%04x", gt_cthist[k][0], gt_cthist[k][1]);
+						}
+					}
+					fprintf(stderr, "\n[CRASH] pc history (oldest first):");
+					{
+						extern uint16_t gt_pchist[2048];
+						extern uint16_t gt_pchist_i;
+						for (int i = 0; i < 2048; i++)
+							fprintf(stderr, " %04x", gt_pchist[(gt_pchist_i + i) & 2047]);
+					}
+					fprintf(stderr, "\n");
+				}
+			}
+#endif
 		}
 
 		elapsedCycles = instr.cycles + opExtraCycles;
+#ifdef GT_PROFILE
+		{ extern uint8_t gt_prof_last_cycles; gt_prof_last_cycles = elapsedCycles; }
+#endif
 		// The ops extra cycles have been accounted for, it must now be reset
 		opExtraCycles = 0;
 
@@ -1703,8 +1749,18 @@ void mos6502::Op_INY(uint16_t src)
 	Y = m;
 }
 
+#ifdef GT_PROFILE
+// control-transfer ring: {from, to} pairs, dumped at the crash
+uint16_t gt_cthist[512][2];
+uint16_t gt_cthist_i;
+#define GT_CT(f, t) do { if (lr_profile) { gt_cthist[gt_cthist_i & 511][0] = (f); gt_cthist[gt_cthist_i & 511][1] = (t); gt_cthist_i++; } } while (0)
+#else
+#define GT_CT(f, t)
+#endif
+
 void mos6502::Op_JMP(uint16_t src)
 {
+	GT_CT(pc, src);
 	pc = src;
 }
 
@@ -1713,6 +1769,7 @@ void mos6502::Op_JSR(uint16_t src)
 	pc--;
 	StackPush((pc >> 8) & 0xFF);
 	StackPush(pc & 0xFF);
+	GT_CT(pc, src);
 	pc = src;
 }
 

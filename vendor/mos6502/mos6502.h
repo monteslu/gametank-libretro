@@ -262,6 +262,7 @@ public:
 	void NMI();
 	void IRQ();
 	void ScheduleIRQ(uint32_t cycles, bool *gate);
+	bool lr_profile = false;   // GT_PROFILE: count this core's cycles
 	void ClearIRQ();
 	void Reset();
 	void Run(
