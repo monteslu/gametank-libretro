@@ -731,6 +731,21 @@ RETRO_API void retro_run(void) {
         for (int i = 0; i < 256; i++)
             if (gt_prof[i]) fprintf(stderr, "%02x %u\n", i, gt_prof[i]);
         fprintf(stderr, "[PROFEND]\n");
+        // the last 512 control transfers: who jumps where right now
+        extern uint16_t gt_cthist[512][2];
+        extern uint32_t gt_cthist_i;
+        fprintf(stderr, "[CT]\n");
+        for (uint32_t k = 0; k < 512; k++) {
+            uint32_t idx = (gt_cthist_i + k) & 511;
+            fprintf(stderr, "%04x %04x\n", gt_cthist[idx][0], gt_cthist[idx][1]);
+        }
+        fprintf(stderr, "[CTEND]\n");
+        extern uint16_t gt_pchist[2048];
+        extern uint16_t gt_pchist_i;
+        fprintf(stderr, "[PCH]\n");
+        for (uint32_t k = 0; k < 2048; k++)
+            fprintf(stderr, "%04x\n", gt_pchist[(gt_pchist_i + k) & 2047]);
+        fprintf(stderr, "[PCHEND]\n");
       } }
 #endif
     // --- present the active VRAM page -------------------------------------
