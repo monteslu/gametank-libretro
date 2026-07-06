@@ -138,6 +138,11 @@ extern "C" RETRO_API void gt_prof_config(int from, int at) {
     gt_prof_at = at;
 }
 extern "C" RETRO_API void gt_watch_config(int addr) { gt_watch_addr = addr; }
+#else
+// the wasm export list names these unconditionally — keep no-op stubs so
+// non-debug builds link
+extern "C" RETRO_API void gt_prof_config(int from, int at) { (void)from; (void)at; }
+extern "C" RETRO_API void gt_watch_config(int addr) { (void)addr; }
 #endif
 static retro_audio_sample_t      audio_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
