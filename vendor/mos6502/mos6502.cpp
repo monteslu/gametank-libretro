@@ -1312,6 +1312,10 @@ void mos6502::Run(
 			extern uint32_t gt_prof[256];
 			extern uint8_t  gt_prof_last_cycles;
 			gt_prof[(pc >> 8) & 0xFF] += gt_prof_last_cycles;
+			// fine histogram: cycles per exact PC (page attribution lies
+			// when a hot helper shares a page with cold code)
+			extern uint32_t gt_prof_fine[65536];
+			gt_prof_fine[pc] += gt_prof_last_cycles;
 			// rolling pc history, dumped at the first illegal opcode
 			extern uint16_t gt_pchist[2048];
 			extern uint16_t gt_pchist_i;
