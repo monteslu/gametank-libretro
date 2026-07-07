@@ -1314,8 +1314,9 @@ void mos6502::Run(
 			gt_prof[(pc >> 8) & 0xFF] += gt_prof_last_cycles;
 			// fine histogram: cycles per exact PC (page attribution lies
 			// when a hot helper shares a page with cold code)
-			extern uint32_t gt_prof_fine[65536];
-			gt_prof_fine[pc] += gt_prof_last_cycles;
+			extern uint32_t gt_prof_fine[4][65536];
+			extern uint8_t gt_prof_bank;
+			gt_prof_fine[(pc >= 0x8000 && pc < 0xC000) ? gt_prof_bank : 3][pc] += gt_prof_last_cycles;
 			// rolling pc history, dumped at the first illegal opcode
 			extern uint16_t gt_pchist[2048];
 			extern uint16_t gt_pchist_i;
@@ -1779,8 +1780,9 @@ void mos6502::Op_JSR(uint16_t src)
 	// fine histogram (callgrind for the 6502 — the fine histogram says
 	// where cycles go, this says how many times each entry was called)
 	if (lr_profile) {
-		extern uint32_t gt_jsr_cnt[65536];
-		gt_jsr_cnt[src]++;
+		extern uint32_t gt_jsr_cnt[4][65536];
+		extern uint8_t gt_prof_bank;
+		gt_jsr_cnt[(src >= 0x8000 && src < 0xC000) ? gt_prof_bank : 3][src]++;
 	}
 #endif
 	pc = src;

@@ -126,8 +126,12 @@ static retro_environment_t       environ_cb;
 static retro_video_refresh_t     video_cb;
 #ifdef GT_PROFILE
 uint32_t gt_prof[256];
-uint32_t gt_prof_fine[65536];
-uint32_t gt_jsr_cnt[65536];
+// fine histogram is bank-aware: banks 0-2 collide at $8000-BFFF, so slot
+// 0-2 = the flash bank latch for banked PCs, slot 3 = everything else
+// (fixed bank, RAM). Same layout for the call counter.
+uint32_t gt_prof_fine[4][65536];
+uint32_t gt_jsr_cnt[4][65536];
+uint8_t  gt_prof_bank;   // updated by the flash bank shifter
 uint8_t  gt_prof_last_cycles;
 uint16_t gt_pchist[2048];
 uint16_t gt_pchist_i;
@@ -228,6 +232,10 @@ void UpdateFlashShiftRegister(uint8_t nextVal) {
         // frontend persists save_ram via RETRO_MEMORY_SAVE_RAM instead, so we
         // just latch the new bank mask.
         cartridge_state.bank_mask = cartridge_state.bank_shifter;
+#ifdef GT_PROFILE
+        { extern uint8_t gt_prof_bank;
+          gt_prof_bank = cartridge_state.bank_shifter & 3; }
+#endif
         if (loadedRomType != RomType::FLASH2M_RAM32K) {
             cartridge_state.bank_mask |= 0x80;
         }
@@ -735,20 +743,25 @@ RETRO_API void retro_run(void) {
         for (int i = 0; i < 256; i++)
             if (gt_prof[i]) fprintf(stderr, "%02x %u\n", i, gt_prof[i]);
         fprintf(stderr, "[PROFEND]\n");
-        // fine histogram: every address >=0.05%% of the window, descending
+        // fine histogram: bank-tagged lines "b:addr count"
         {
             uint64_t total = 0;
-            for (int i = 0; i < 65536; i++) total += gt_prof_fine[i];
+            for (int b = 0; b < 4; b++)
+                for (int i = 0; i < 65536; i++) total += gt_prof_fine[b][i];
             uint32_t floor_c = (uint32_t)(total / 2000);
+            { const char* fs = getenv("GT_FINE_FLOOR");
+              if (fs) floor_c = (uint32_t)atoi(fs); }
             fprintf(stderr, "[FINE] total=%llu\n", (unsigned long long)total);
-            for (int i = 0; i < 65536; i++)
-                if (gt_prof_fine[i] > floor_c)
-                    fprintf(stderr, "%04x %u\n", i, gt_prof_fine[i]);
+            for (int b = 0; b < 4; b++)
+                for (int i = 0; i < 65536; i++)
+                    if (gt_prof_fine[b][i] > floor_c)
+                        fprintf(stderr, "%d:%04x %u\n", b, i, gt_prof_fine[b][i]);
             fprintf(stderr, "[FINEEND]\n");
             fprintf(stderr, "[CALLS]\n");
-            for (int i = 0; i < 65536; i++)
-                if (gt_jsr_cnt[i] > 200)
-                    fprintf(stderr, "%04x %u\n", i, gt_jsr_cnt[i]);
+            for (int b = 0; b < 4; b++)
+                for (int i = 0; i < 65536; i++)
+                    if (gt_jsr_cnt[b][i] > 200)
+                        fprintf(stderr, "%d:%04x %u\n", b, i, gt_jsr_cnt[b][i]);
             fprintf(stderr, "[CALLSEND]\n");
         }
         // the last 512 control transfers: who jumps where right now
