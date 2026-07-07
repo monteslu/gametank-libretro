@@ -139,15 +139,18 @@ uint16_t gt_pchist_i;
 // the profile window is set through an exported call instead
 static int gt_prof_from = 0, gt_prof_at = 400;
 static int gt_watch_addr = -1;
+static int gt_fine_floor = -1;   /* -1: default total/2000 */
 extern "C" RETRO_API void gt_prof_config(int from, int at) {
     gt_prof_from = from;
     gt_prof_at = at;
 }
+extern "C" RETRO_API void gt_prof_floor(int floor_c) { gt_fine_floor = floor_c; }
 extern "C" RETRO_API void gt_watch_config(int addr) { gt_watch_addr = addr; }
 #else
 // the wasm export list names these unconditionally — keep no-op stubs so
 // non-debug builds link
 extern "C" RETRO_API void gt_prof_config(int from, int at) { (void)from; (void)at; }
+extern "C" RETRO_API void gt_prof_floor(int floor_c) { (void)floor_c; }
 extern "C" RETRO_API void gt_watch_config(int addr) { (void)addr; }
 #endif
 static retro_audio_sample_t      audio_cb;
@@ -222,6 +225,7 @@ void VDMA_Write(uint16_t address, uint8_t value) {
 
 void UpdateFlashShiftRegister(uint8_t nextVal) {
     uint8_t oldVal = system_state.VIA_regs[VIA_ORA];
+
     uint8_t risingBits = nextVal & ~oldVal;
     if (risingBits & VIA_SPI_BIT_CLK) {
         cartridge_state.bank_shifter = cartridge_state.bank_shifter << 1;
@@ -748,9 +752,10 @@ RETRO_API void retro_run(void) {
             uint64_t total = 0;
             for (int b = 0; b < 4; b++)
                 for (int i = 0; i < 65536; i++) total += gt_prof_fine[b][i];
-            uint32_t floor_c = (uint32_t)(total / 2000);
-            { const char* fs = getenv("GT_FINE_FLOOR");
-              if (fs) floor_c = (uint32_t)atoi(fs); }
+            /* getenv is useless in wasm (virtual env) — the floor arrives
+             * via the exported gt_prof_floor() call */
+            uint32_t floor_c = (gt_fine_floor >= 0)
+                ? (uint32_t)gt_fine_floor : (uint32_t)(total / 2000);
             fprintf(stderr, "[FINE] total=%llu\n", (unsigned long long)total);
             for (int b = 0; b < 4; b++)
                 for (int i = 0; i < 65536; i++)
