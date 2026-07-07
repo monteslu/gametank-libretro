@@ -763,10 +763,11 @@ RETRO_API void retro_run(void) {
                         fprintf(stderr, "%d:%04x %u\n", b, i, gt_prof_fine[b][i]);
             fprintf(stderr, "[FINEEND]\n");
             fprintf(stderr, "[CALLS]\n");
-            for (int b = 0; b < 4; b++)
+            { uint32_t cfloor = (gt_fine_floor >= 0) ? (uint32_t)gt_fine_floor : 200;
+              for (int b = 0; b < 4; b++)
                 for (int i = 0; i < 65536; i++)
-                    if (gt_jsr_cnt[b][i] > 200)
-                        fprintf(stderr, "%d:%04x %u\n", b, i, gt_jsr_cnt[b][i]);
+                    if (gt_jsr_cnt[b][i] > cfloor)
+                        fprintf(stderr, "%d:%04x %u\n", b, i, gt_jsr_cnt[b][i]); }
             fprintf(stderr, "[CALLSEND]\n");
         }
         // the last 512 control transfers: who jumps where right now
