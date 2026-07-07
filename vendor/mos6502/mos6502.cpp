@@ -1774,6 +1774,15 @@ void mos6502::Op_JSR(uint16_t src)
 	StackPush((pc >> 8) & 0xFF);
 	StackPush(pc & 0xFF);
 	GT_CT(pc, src);
+#ifdef GT_PROFILE
+	// jsr-edge counter: calls per target address, window-gated with the
+	// fine histogram (callgrind for the 6502 — the fine histogram says
+	// where cycles go, this says how many times each entry was called)
+	if (lr_profile) {
+		extern uint32_t gt_jsr_cnt[65536];
+		gt_jsr_cnt[src]++;
+	}
+#endif
 	pc = src;
 }
 

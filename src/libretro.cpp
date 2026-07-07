@@ -127,6 +127,7 @@ static retro_video_refresh_t     video_cb;
 #ifdef GT_PROFILE
 uint32_t gt_prof[256];
 uint32_t gt_prof_fine[65536];
+uint32_t gt_jsr_cnt[65536];
 uint8_t  gt_prof_last_cycles;
 uint16_t gt_pchist[2048];
 uint16_t gt_pchist_i;
@@ -726,6 +727,7 @@ RETRO_API void retro_run(void) {
         extern uint32_t gt_prof[256];
         memset(gt_prof, 0, sizeof(gt_prof));
         memset(gt_prof_fine, 0, sizeof(gt_prof_fine));
+        memset(gt_jsr_cnt, 0, sizeof(gt_jsr_cnt));
       }
       if (pf == gt_prof_at) {
         extern uint32_t gt_prof[256];
@@ -743,6 +745,11 @@ RETRO_API void retro_run(void) {
                 if (gt_prof_fine[i] > floor_c)
                     fprintf(stderr, "%04x %u\n", i, gt_prof_fine[i]);
             fprintf(stderr, "[FINEEND]\n");
+            fprintf(stderr, "[CALLS]\n");
+            for (int i = 0; i < 65536; i++)
+                if (gt_jsr_cnt[i] > 200)
+                    fprintf(stderr, "%04x %u\n", i, gt_jsr_cnt[i]);
+            fprintf(stderr, "[CALLSEND]\n");
         }
         // the last 512 control transfers: who jumps where right now
         extern uint16_t gt_cthist[512][2];
