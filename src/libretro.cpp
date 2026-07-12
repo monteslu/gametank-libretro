@@ -153,6 +153,25 @@ extern "C" RETRO_API void gt_prof_config(int from, int at) { (void)from; (void)a
 extern "C" RETRO_API void gt_prof_floor(int floor_c) { (void)floor_c; }
 extern "C" RETRO_API void gt_watch_config(int addr) { (void)addr; }
 #endif
+// GRAM/VRAM pointer + size exports for the headless harness (dump/inspect the
+// blitter's 1 MB group RAM and the framebuffer). Named unconditionally in the
+// wasm export list, so define them in every build.
+extern "C" RETRO_API uint8_t* gt_gram_ptr(void) { return system_state.gram; }
+extern "C" RETRO_API int      gt_gram_size(void) { return GRAM_BUFFER_SIZE; }
+extern "C" RETRO_API uint8_t* gt_vram_ptr(void) { return system_state.vram; }
+extern "C" RETRO_API int      gt_vram_size(void) { return VRAM_BUFFER_SIZE; }
+// Monotonic main-CPU cycle counter (accumulates across retro_run, reset only on
+// retro_reset / restored on state-load). The micro-benchmark harness reads this
+// before/after the function under test to get EXACT per-call cycle counts.
+// Returned lo/hi so a 32-bit wasm ABI can carry the full 64-bit value.
+extern "C" RETRO_API uint32_t gt_cycles_lo(void) { return (uint32_t)(timekeeper.totalCyclesCount & 0xFFFFFFFFu); }
+extern "C" RETRO_API uint32_t gt_cycles_hi(void) { return (uint32_t)(timekeeper.totalCyclesCount >> 32); }
+// Blitter pixel load: pixels written by the blitter during the LAST vsync
+// (snapshotted just before retro_run resets the per-frame counter). This is the
+// direct hardware measure of blit saturation — a full 128x128 screen fill is
+// 16,384 px; the ~30fps budget is roughly one screen's worth per game-frame.
+static uint64_t gt_last_frame_pixels = 0;
+extern "C" RETRO_API uint32_t gt_blit_pixels(void) { return (uint32_t)gt_last_frame_pixels; }
 static retro_audio_sample_t      audio_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
 static retro_input_poll_t        input_poll_cb;
@@ -299,8 +318,27 @@ uint8_t MemoryRead(uint16_t address) {
     return MemoryReadResolve(address, true);
 }
 
+// ---- cycle-marker ring: the micro-benchmark harness sets a "marker" RAM
+// address; every CPU write to it records (value, totalCyclesCount) so JS can
+// diff the cycle counts between two markers = EXACT cost of the code between
+// them. Independent of the watch/printf path above. -1 disables (default).
+static int      gt_marker_addr = -1;
+static uint8_t  gt_marker_val[256];
+static uint64_t gt_marker_cyc[256];
+static int      gt_marker_n = 0;
+extern "C" RETRO_API void     gt_marker_config(int addr) { gt_marker_addr = addr; gt_marker_n = 0; }
+extern "C" RETRO_API int      gt_marker_count(void) { return gt_marker_n; }
+extern "C" RETRO_API int      gt_marker_value(int i) { return (i >= 0 && i < gt_marker_n) ? gt_marker_val[i] : -1; }
+extern "C" RETRO_API uint32_t gt_marker_cyc_lo(int i) { return (i >= 0 && i < gt_marker_n) ? (uint32_t)(gt_marker_cyc[i] & 0xFFFFFFFFu) : 0; }
+extern "C" RETRO_API uint32_t gt_marker_cyc_hi(int i) { return (i >= 0 && i < gt_marker_n) ? (uint32_t)(gt_marker_cyc[i] >> 32) : 0; }
+
 void MemoryWrite(uint16_t address, uint8_t value) {
 #ifdef GT_PROFILE
+    if ((int)address == gt_marker_addr && gt_marker_n < 256) {
+        gt_marker_val[gt_marker_n] = value;
+        gt_marker_cyc[gt_marker_n] = timekeeper.totalCyclesCount;
+        gt_marker_n++;
+    }
     // gt_watch_config: trap writes to one RAM address, print the writer's pc
     if ((int)address == gt_watch_addr && cpu_core) {
         static int hits = 0;
@@ -532,6 +570,13 @@ static uint16_t poll_pad(unsigned port) {
 // ===========================================================================
 static const struct retro_variable core_options[] = {
     { "gametank_force_ram32k", "Force 32K battery SRAM (Flash2M carts); disabled|enabled" },
+    // Palette (color conversion). The GameTank's raw output is post-processed
+    // four different ways in the upstream emulator's menu; expose the same choice
+    // so native carts render with the palette they were authored for. Default is
+    // "capture" to match the upstream default; "legacy" is the original naive
+    // conversion the GameTank web/store screenshots use (e.g. pink hearts in
+    // Cubicle Knight vs capture's purple).
+    { "gametank_palette", "Color palette; capture|legacy|scaled|hdmi" },
     { nullptr, nullptr },
 };
 
@@ -539,6 +584,13 @@ static void check_variables() {
     struct retro_variable var = { "gametank_force_ram32k", nullptr };
     if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         force_ram32k = (strcmp(var.value, "enabled") == 0);
+    }
+    struct retro_variable pvar = { "gametank_palette", nullptr };
+    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &pvar) && pvar.value) {
+        if      (strcmp(pvar.value, "legacy") == 0) palette_select = PALETTE_SELECT_OLD;
+        else if (strcmp(pvar.value, "scaled") == 0) palette_select = PALETTE_SELECT_SCALED;
+        else if (strcmp(pvar.value, "hdmi")   == 0) palette_select = PALETTE_SELECT_HDMI;
+        else                                        palette_select = PALETTE_SELECT_CAPTURE;
     }
 }
 
@@ -706,6 +758,7 @@ RETRO_API void retro_run(void) {
             cpu_core->NMI();
         }
     }
+    gt_last_frame_pixels = blitter->pixels_this_frame;
     blitter->pixels_this_frame = 0;
 
     // --- audio: pull this frame's samples from the ACP --------------------
