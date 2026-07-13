@@ -633,7 +633,7 @@ RETRO_API unsigned retro_api_version(void) { return RETRO_API_VERSION; }
 RETRO_API void retro_get_system_info(struct retro_system_info *info) {
     memset(info, 0, sizeof(*info));
     info->library_name     = "GameTank";
-    info->library_version  = "0.1.0";
+    info->library_version  = "0.1.3";
     info->valid_extensions = "gtr";
     info->need_fullpath    = false;
     info->block_extract    = false;
@@ -736,6 +736,13 @@ RETRO_API void retro_reset(void) {
     joysticks->reset();
     timekeeper.totalCyclesCount = 0;
     timekeeper.cycles_since_vsync = 0;
+    // Rewinding totalCyclesCount without realigning the blitter's lazy clock
+    // makes the next CatchUp() compute `0 - last_updated_cycle` in uint64 -
+    // a ~2^64-cycle loop that never returns (frozen host). Clear the engine
+    // to power-on state AND align its clock to the rewound timeline, the same
+    // way state-load does.
+    Blitter::LRState bs = {};
+    blitter->LR_SetState(&bs, 0);
 }
 
 // ---------------------------------------------------------------------------
