@@ -639,9 +639,21 @@ RETRO_API void retro_get_system_info(struct retro_system_info *info) {
     info->block_extract    = false;
 }
 
-// GameTank DAC native sample rate (Hz): 315000000 / (88 * 256).
+// Host audio rate. We report 44100 and pace the ACP EXACTLY like the upstream
+// SDL emulator does at a 44100 Hz device: clksPerHostSample = 315000000/(88 *
+// 44100) = 81, so the sample IRQ lands every ~3.15 host samples = ~14.0 kHz -
+// the cadence the whole GameTank ecosystem's pitch_table is tuned against.
+//
+// The previous scheme emitted at the DAC's native ~13.98 kHz but left the
+// constructor's noSound default clksPerHostSample = 1024 (4x the correct 256),
+// over-driving the ACP's IRQ clock; measured output sat ONE OCTAVE SHARP
+// (pitch_table[69], Clyde's A4, played ~877 Hz instead of 440). Matching the
+// upstream pacing fixes tuning and behaves identically to the reference.
+#define GT_HOST_AUDIO_RATE 44100
+#define GT_CLKS_PER_HOST_SAMPLE (315000000 / (88 * GT_HOST_AUDIO_RATE))   // 81
+#define GT_SAMPLES_PER_FRAME (GT_HOST_AUDIO_RATE / 60)                    // 735
 static double dac_sample_rate() {
-    return 315000000.0 / (88.0 * 256.0);   // ~13967.6 Hz
+    return (double)GT_HOST_AUDIO_RATE;
 }
 
 // 8-bit DAC sample -> S16 gain. The raw DAC byte (0..255) is high-passed below to
@@ -680,12 +692,12 @@ static void gt_fill_audio(ACPState *state, int16_t *out, uint32_t n) {
         out[i * 2 + 1] = (int16_t)s;
 
         // --- CPU-advance loop ---
-        // Upstream fill_audio() fires at most ONE sample-IRQ per host sample,
-        // which is fine when the host rate ~= the DAC rate. Under this shim
-        // clksPerHostSample (1024) >> irqRate (255), so the int16 counter
-        // free-fell ~769/sample until it wrapped, starving the ACP of IRQs
-        // for ~32 of every ~75 host samples (audible 187 Hz chop + low notes
-        // reading flat). Let the ACP catch up fully each host sample instead.
+        // Mirrors upstream fill_audio(): count down ACP clocks per host sample
+        // and fire the sample IRQ when the counter wraps. At 44100 Hz host
+        // (clksPerHostSample=81, irqRate~255) at most one IRQ fires per ~3
+        // samples - the upstream SDL cadence exactly. Kept as a while so a
+        // hypothetical clksPerHostSample > irqRate config still can't starve
+        // the ACP of IRQs.
         state->irqCounter -= state->clksPerHostSample;
         while (state->irqCounter < 0) {
             if (state->resetting) {
@@ -776,11 +788,13 @@ RETRO_API void retro_run(void) {
     // headroom so peaks don't clip.
     {
         ACPState *acp = AudioCoprocessor::singleton_acp_state;
-        uint32_t n = acp->samples_per_frame;
-        if (n == 0) n = (uint32_t)(dac_sample_rate() / 60.0 + 0.5);  // ~233
-        if (n > 2048) n = 2048;
+        // Force the upstream-SDL pacing every frame: the constructor's noSound
+        // branch seeds clksPerHostSample=1024 (an idle-mode placeholder), which
+        // over-clocks the ACP IRQ 4x and plays everything an octave sharp.
+        acp->clksPerHostSample = GT_CLKS_PER_HOST_SAMPLE;
+        uint32_t n = GT_SAMPLES_PER_FRAME;   // 735 @ 44100 Hz, one 60 Hz frame
 
-        static int16_t stereo[2048 * 2];
+        static int16_t stereo[GT_SAMPLES_PER_FRAME * 2];
         gt_fill_audio(acp, stereo, n);
         if (audio_batch_cb) audio_batch_cb(stereo, n);
     }
