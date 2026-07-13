@@ -85,6 +85,25 @@ ifeq ($(platform),retroemu)
   CXXFLAGS   := $(CXXSTD) $(OPTIM) $(WARN) $(DEFINES) $(INCLUDES) -fPIC
   LDFLAGS    := $(OPTIM) $(EMFLAGS)
   LINK       := $(CXX)
+else ifeq ($(platform),benchcore)
+  # ---- benchmark/profiling core (GT_PROFILE retroemu build) ----
+  # The gt-lua SDK's bench harness (gametank_lua_sdk/bench) needs the
+  # cycle-marker ring: -DGT_PROFILE compiled in and the gt_marker_* +
+  # gt_prof_* exports. Emits gametank_libretro_prof.{js,wasm}; the shipping
+  # core stays unprofiled (the hooks cost cycles). Own object suffix so
+  # profile and plain objects never mix.
+  CXX        := emcc
+  OBJEXT     := .emp.o
+  OUTPUT     := $(TARGET)_prof.js
+  EM_EXPORTS := '["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_gt_prof_config","_gt_prof_floor","_gt_watch_config","_gt_marker_config","_gt_marker_count","_gt_marker_value","_gt_marker_cyc_lo","_gt_marker_cyc_hi","_gt_cycles_lo","_gt_cycles_hi","_gt_vram_ptr","_gt_vram_size","_gt_gram_ptr","_gt_gram_size","_malloc","_free"]'
+  EM_RUNTIME := '["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue"]'
+  EMFLAGS    := -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=create_gametank \
+                -s ENVIRONMENT=node -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=33554432 \
+                -s MAXIMUM_MEMORY=268435456 -s ALLOW_TABLE_GROWTH=1 -s INVOKE_RUN=0 \
+                -s EXPORTED_FUNCTIONS=$(EM_EXPORTS) -s EXPORTED_RUNTIME_METHODS=$(EM_RUNTIME)
+  CXXFLAGS   := $(CXXSTD) $(OPTIM) $(WARN) $(DEFINES) -DGT_PROFILE $(INCLUDES) -fPIC
+  LDFLAGS    := $(OPTIM) $(EMFLAGS)
+  LINK       := $(CXX)
 else ifeq ($(platform),emscripten)
   # ---- Emscripten / WASM (bare side module) ----
   # Modern emcc emits real wasm object files from -c (not LLVM bitcode). Use a
@@ -160,6 +179,8 @@ $(OUTPUT): $(OBJECTS)
 # targets. The more-specific .em.o / .android.o patterns are listed first so make
 # prefers them over the bare %.o for those names.
 %.em.o: %.cpp
+	$(CXX) $(CXXFLAGS) $(CXXFLAGS_EXTRA) -c $< -o $@
+%.emp.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(CXXFLAGS_EXTRA) -c $< -o $@
 
 %.android.o: %.cpp

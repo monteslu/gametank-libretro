@@ -17,3 +17,5 @@ test/harness
 # downloaded test ROMs (not part of the repo; not ours to ship)
 testroms/
 gametank_libretro.js
+gametank_libretro_prof.js
+*.emp.o
